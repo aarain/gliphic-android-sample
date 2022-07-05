@@ -1,0 +1,167 @@
+apply plugin: "com.android.application"
+apply plugin: "kotlin-android"
+
+android {
+    compileSdkVersion 29
+    ndkVersion "22.0.7026061"   // Required for native debug symbols.
+
+    defaultConfig {
+        applicationId "gliphic.android"
+        minSdkVersion 23
+        targetSdkVersion 29
+        versionCode 22
+        versionName "4.0.4"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+        }
+
+        release {
+            ndk {
+                debugSymbolLevel "SYMBOL_TABLE"     // Required for native debug symbols.
+            }
+
+            // See: https://developer.android.com/studio/build/shrink-code#enable
+
+            // Enables code shrinking, obfuscation, and optimization for only
+            // your project's release build type.
+            minifyEnabled true
+
+            // Enables resource shrinking, which is performed by the
+            // Android Gradle plugin.
+            shrinkResources true
+
+            // Includes the default ProGuard rules files that are packaged with
+            // the Android Gradle plugin. To learn more, go to the section about
+            // R8 configuration files.
+            proguardFiles getDefaultProguardFile(
+                    'proguard-android-optimize.txt'),
+                    // List additional ProGuard rules for the given build type here. By default,
+                    // Android Studio creates and includes an empty rules file for you (located
+                    // at the root directory of each module).
+                    'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        // Flag to enable support for the new language APIs.
+        // See: https://developer.android.com/studio/write/java8-support#library-desugaring
+        coreLibraryDesugaringEnabled true
+
+        // Sets Java compatibility to Java 8; required after upgrading to Gradle 5.8.0.
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    dependenciesInfo {
+        // Disable adding metadata describing dependencies compiled into the app.
+        // See: https://developer.android.com/studio/releases/gradle-plugin?utm_medium=studio-assistant-stable&utm_source=android-studio-4-0#dependency-metadata
+        includeInApk = false        // Disables dependency metadata when building APKs.
+        includeInBundle = false     // Disables dependency metadata when building Android App Bundles.
+    }
+}
+
+ext {
+    espressoVersion = "3.3.0"
+    mozillaComponentsVersion = "70.0.18"
+}
+
+dependencies {
+    implementation fileTree(include: ["*.jar"], dir: "libs")
+
+    // Android Studio should show a warning when the latest version of these libraries is available.
+
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:1.1.1'
+
+    androidTestImplementation "androidx.test.ext:junit-ktx:1.1.2"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$espressoVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-contrib:$espressoVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-intents:$espressoVersion"
+    androidTestImplementation "androidx.test:runner:1.3.0"
+    androidTestImplementation "androidx.test:rules:1.3.0"
+
+    implementation "androidx.appcompat:appcompat:1.2.0"
+    implementation "androidx.annotation:annotation:1.1.0"
+    implementation "androidx.cardview:cardview:1.0.0"
+    implementation "androidx.constraintlayout:constraintlayout:2.0.4"
+    implementation "androidx.recyclerview:recyclerview:1.1.0"
+    implementation "androidx.swiperefreshlayout:swiperefreshlayout:1.1.0"
+    implementation "com.google.android.material:material:1.2.1"
+
+    // Mozilla (browser) components. See: https://github.com/mozilla-mobile/android-components
+    implementation "org.mozilla.components:browser-engine-gecko:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:browser-icons:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:browser-menu:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:browser-session:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:browser-state:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:browser-storage-sync:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:browser-thumbnails:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:browser-toolbar:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:concept-engine:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:concept-fetch:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:feature-contextmenu:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:feature-downloads:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:feature-media:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:feature-readerview:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:feature-search:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:feature-session:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:feature-sitepermissions:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:feature-tabs:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:feature-toolbar:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:feature-webnotifications:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:lib-fetch-httpurlconnection:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:service-location:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:support-webextensions:$mozillaComponentsVersion"
+    implementation "org.mozilla.components:ui-icons:$mozillaComponentsVersion"
+
+    // Required for the DownloadService used by DownloadMiddleware, located in Mozilla's feature-downloads.
+    implementation "com.google.android.exoplayer:exoplayer-core:2.13.2"
+
+    // TODO: Allow use of EncryptedSharedPreferences by using a stable version of this dependency.
+    //       Use of version '1.1.0-alpha01' causes a ExceptionInInitializerError to be thrown when using
+    //       EncryptedSharedPreferences. Anecdotal reports suggest that version '1.0.0-alpha02' does not have this
+    //       issue, but this would require some additional code refactoring and since it is itself an alpha version it
+    //       cannot be guaranteed to be stable in other ways.
+    //       Google issue tracker: https://issuetracker.google.com/issues/157983099
+    //       SO: https://stackoverflow.com/questions/62135766/secured-android-sharedpreferences-error-caused-by-java-lang-runtimeexception
+    implementation "androidx.security:security-crypto:1.1.0-alpha03"
+
+    // TODO: Remove this dependency and replace usage of LocalBroadcastManager with a non-deprecated class.
+    //       This class was part of the appcompat:1.0.X implementation (X=2 is a known version).
+    //       See: https://developer.android.com/reference/androidx/localbroadcastmanager/content/LocalBroadcastManager
+    implementation "androidx.localbroadcastmanager:localbroadcastmanager:1.0.0"
+
+    // The latest versions of these libraries can be searched for manually on: https://mvnrepository.com/
+
+    implementation "com.android.volley:volley:1.1.1"
+    implementation "com.google.code.gson:gson:2.8.6"
+    implementation "org.apache.commons:commons-lang3:3.11"
+    implementation("org.igniterealtime.smack:smack-core:4.3.5") {
+        exclude group: "xpp3", module: "xpp3"
+    }
+    implementation("org.igniterealtime.smack:smack-android:4.3.5") {
+        exclude group: "xpp3", module: "xpp3"
+    }
+    implementation("org.igniterealtime.smack:smack-experimental:4.3.5") {
+        exclude group: "xpp3", module: "xpp3"
+    }
+    implementation("org.igniterealtime.smack:smack-tcp:4.3.5") {
+        exclude group: "xpp3", module: "xpp3"
+    }
+    implementation group: "org.bouncycastle", name: "bcpkix-jdk15on", version: "1.66"
+    implementation group: "org.bouncycastle", name: "bcprov-jdk15on", version: "1.66"
+//    implementation group: 'org.mockito', name: 'mockito-core', version: '3.3.3'
+//    implementation group: 'org.mockito', name: 'mockito-android', version: '3.3.3'
+
+    testImplementation "junit:junit:4.12"
+    // This is the up-to-date migrated version of junit, but using this new version still uses the old junit for tests
+    // which use the emulator.
+//    testImplementation "org.junit.jupiter:junit-jupiter-api:5.7.0"
+
+    // Manually imported compiled java file.
+    implementation files("libs/GlobalUtils.jar")
+}

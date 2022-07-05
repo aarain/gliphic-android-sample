@@ -1,0 +1,1718 @@
+# (c) Ashley Arain 2017
+#
+# The copyright in this software is the property of Ashley Arain. This
+# software may not be copied, disclosed, licensed, modified, reproduced,
+# sold, transferred or used in part or in whole or in any manner or form
+# other than in accordance with the licence agreement provided with this
+# software or otherwise without the prior written consent of Ashley Arain.
+
+0 Security Principles
+0.1 Comparing symmetric and asymmetric key size complexity
+
+http://crypto.stackexchange.com/questions/8687/security-strength-of-rsa-in-relation-with-the-modulus-size
+
+Strength  RSA modulus size   Complexity bit-length
+  80        1024               86.76611925028119
+ 112        2048              116.8838132958159
+ 128        3072              138.7362808527251
+ 192        7680              203.01873594417665
+ 256       15360              269.38477262128384
+
+
+1 Core objects
+1.1 Contact
+
+A contact is synonymous with a user of the application. Each contact has the following attributes:
+- An image (not unique)
+- A name (not unique)
+- A number (unique)
+- Other attributes: see the code for more details.
+
+The following are mutually exclusive types of contact, as seen from the perspective of a single contact:
+- Current contact:  This is the single contact themselves.
+- Known contacts:   This includes all contacts which the current contact has chosen to add. Note that there is no
+                    requirement or implication that the current contact and known contacts share any common groups.
+- Extended contact: This includes all contacts which share at least one common group with the current contact but
+                    have not been added as known contacts.
+- Unknown contact:  Unknown contacts are extended contacts with exactly zero common groups with the current contact.
+
+Note: A known or extended contact as seen by the current contact is also known collectively as a "target" contact.
+
+1.2 Group
+
+A group is a single cryptographic entity such that all messages within a single group are encrypted and decrypted
+using a single set of keys. Any contact with access to a given group can view decryptable messages regardless of when
+they became a member of the group or when the message was created. Each group has the following attributes:
+- An image (not unique)
+- A name (not unique)
+- A number (unique)
+- An identifier (ID) (unique)
+- A set of permissions (not unique)
+- Other attributes: see the code for more details.
+
+1.2.1 Group permissions
+
+Every contact with access to a group has a set of permissions related to that group, granting them a particular set
+of privileges.
+
+Group permissions are defined by two parts, the first part represents whether the group is active or not
+(a permission self-imposed/chosen by the contact) and the second part represents how the user can use the group
+(a permission imposed/chosen by any user with permission to change the group's second permission).
+
+TODO:
+  * Add the ADMINISTRATOR permission.
+  * Remove the REVOKER permission.
+A group can have one of the following first permissions:
+  '0' - INACTIVE      - The contact views group messages the same way any unknown contact views them.
+                        This permission effectively ignores any privileges granted by the second permission.
+                        Any limit on the number of groups a contact is allowed to have access to ignores this group.
+  '1' - ACTIVE        - The contact views group messages depending on what is dictated by the second permission.
+and any one of the following second permissions:
+  'O' - OWNER         - The contact has full access to the group. They are able to modify group properties such as
+                        the group's name or open status, can change the permissions of any contact for this group,
+                        and can encrypt/decrypt all group messages.
+  'X' - DENIED        - Functionally identical to the INACTIVE permission except this is not self-imposed by a
+                        contact, and a contact can only leave this state at the discretion of another contact with
+                        the appropriate permissions.
+  'M' - MEMBER        - The contact has minimum access to the group. They cannot modify group properties, cannot
+                        change the permissions of any contact for this group, but can encrypt/decrypt all group
+                        messages.
+  'A' - ADMINISTRATOR - The contact has identical access to the group as an OWNER, except that they cannot change any
+                        OWNER's permission.
+  'D' - DISTRIBUTOR   - The contact has MEMBER access to the group with the additional benefit of being able to grant
+                        MEMBER status to any other contact which does not have access to this group, for this group.
+  'R' - REVOKER       - The contact has MEMBER access to the group with the additional benefit of being able to grant
+                        DENIED status to any other contact for this group.
+
+When a contact creates a group they are automatically given '1O' permissions, and when a contact is added to a group
+they are automatically given '1M' permissions.
+
+1.2.2 Group identifiers (IDs)
+The group ID is a way to uniquely identify a group from a fixed-length string contained within an encrypted message.
+The group ID is public information i.e. any entity, regardless of group access, can view the ID of a group given an
+encrypted message created from the group.
+
+For more information see the Encrypted Message Design section.
+
+1.3 Device code
+A device code is a unique array of bytes used to identify a device. This code is stored on the device as well as in
+an encrypted form in the database (encrypted by the secret server key which encrypts all stored recovery data). The
+device code is used by the server to identify a device hence should only be known by the server and the device the
+code resides on.
+
+The first time the application runs on a device, no device code will exist. When the user attempts to register a new
+account or sign-in to an existing account, the device will generate a new random code and store it on the device.
+
+If x is the number of bytes comprising a device code, the probability of generating the same device code as another
+device is (256^x)^0.5. Choosing x=32 means that a collision will occur after 1000 years if ~10^28 device codes are
+generated every second.
+
+Because device codes are secret (unlike contact/group IDs) an adversary should not be able to query the server to
+find existing device codes, therefore the server should never return a failed status based on a new device code
+duplicating an existing code, and for this reason new device codes cannot be guaranteed to be unique. This means that
+it is possible (although incredibly unlikely) that if another device randomly generates the same code then they can
+use this to attempt to gain access to another contact's recovery data. Uniqueness is not a mandatory requirement
+however, unlike with contact/group IDs.
+
+Currently, the device code is used for the following operations:
+* Account recovery - Each contact has a single device code associated with it, which is the last device the contact
+                     either registered their account with or signed-in with.
+
+1.4 Device (recovery) key
+A device key is used by a device to encrypt data used for account recovery. This key is stored on the device only.
+
+Data encrypted using the device key is not stored on the device. Encrypted data is returned immediately to the server
+when it is generated and not returned to the contact for any reason other than to recover their account.
+
+
+2 Encrypted message design
+2.1 Encrypted message format
+2.1.1 Base4352 design
+
+An input byte array is converted into a string such that each character represents 12 bits from the byte array.
+
+Copied from the Base4352.java class' encode() method:
+
+"
+    Except the remainder bytes, each block of 12 bits is converted into a single character; this bijective
+    relationship means that there are 2^12 = 4096 characters used to encode the (non-remainder) bytes.
+
+    Remainder bytes occur when the input byte array is not a multiple of 3, since the lowest common multiple of the
+    block length and the size of a byte is (12,8) = 24, and 24/8 = 3. Since the maximum number of remainder bytes is
+    2 which means that a possible 16 bits of remainder, which cannot be represented by a single UTF-8 character,
+    therefore two characters must be used. The smallest character set required is 2^(16/2) = 2^8 = 256,
+    so these additional remainder characters give a total of 4096 + 256 = 4352 unique characters for encoding.
+"
+
+2.1.2 Published text construction.
+
+Encrypted messages have the following pseudo-form (the '+' sign indicates string concatenation):
+
+    start_tag + [group ID (Base4352)] + [cipher message (Base4352)] + end_tag
+
+which after cipher-message decoding looks like this:
+
+    start_tag + [group ID (Base4352)] + [initialisation Vector (byte[])] + [cipher text (byte[])] + end_tag
+
+Decrypting the first layer of encryption on the cipher text looks like this:
+
+    decrypted cipher text := [message time out (byte[])] + [raw cipher text (byte[])]
+
+and decrypting the second layer of encryption on the raw cipher text yields the plaintext.
+
+The start_tag and end_tag are universal characters across all user's messages indicating the beginning and end of
+an encrypted message (required for text decryption when the messages to decrypt is unknown).
+
+The group identifier is used instead of the group name for two reasons:
+    1. The group name can be chosen to describe the contents of the messages created from a group without being
+       exposed in the encrypted message.
+    2. It is globally unique, i.e. the server always creates a random ID for every new group.
+
+The initialisation vector is randomly generated in software by the user during the first message encryption stage.
+When this is sent to the server, the server then uses the bitwise complement of this initialisation vector as the
+initialisation vector for the second message encryption stage.
+
+The message time-out is only visible after decrypting the cipher text using the permissions key, where the server
+will have the ability to read it.
+
+The plaintext message which a user wishes to share with the rest of the group is symmetrically encrypted using the
+group key associated with the group ID.
+
+Important: The mechanism used to encrypt messages should use an initialisation vector to ensure that the same
+plaintext always produces difference ciphertexts (in order to prevent statistical analysis on ciphertexts).
+
+2.2 User message encryption and decryption process
+2.2.1 Key design assumptions
+
+- Only one message is sent to the server for encryption, since this is done manually via the app.
+- Any number of messages (up to some pre-determined limit) can be sent to the server for decryption, since this can
+  be done via the auto-decryption feature (or a single encrypted messages can be sent manually via the app).
+- The only cryptography done by the client application is the first (AES) encryption on the plaintext, to prevent the
+  server from seeing the plaintext.
+- The private group key which each contact in a group has access to only has one function: to prevent the server from
+  being able to read plaintext messages. It does not prevent an adversary from being able to read plaintext messages
+  on its own but relies on the data-encryption key of the user to be secure. This places the onus on the server to
+  validate a contact's request and ensure that it is from a legitimate source.
+
+
+2.2.2 Message encryption protocol
+
+The user's process for encrypting messages is executed in the following order:
+1. The contact checks the group permissions of the group attempting to encrypt with locally to avoid unnecessary
+   message transmission (as well as any other checks on the plain text). The contact then sends a request for
+   their encrypted group key (and initialisation vector to decrypt this) to the server:
+
+   {
+       'accessToken' : This authorises a specific contact number.
+       'groupNumber' : group number
+   }
+
+2. The server checks the access token and if successful returns the following:
+
+   {
+       'encryptedGroupKeyString' : The group key encrypted by the contact's data-encryption key.
+       'ivString'                : The initialisation vector required to decrypt the above group key.
+   }
+
+3. The contact then generates an initialisation vector to be used with the plain text, encrypts this (the result of
+   which is called 'decMsg') and then creates a JSONObject to send to the root HTTP message encryption server in the
+   following pseudo-form:
+
+   {
+       'accessToken' : This authorises a specific contact number.
+       'groupNumber' : group number
+       'ivString'    : The initialisation vector for the published text.
+       'decMsg'      : The single-encrypted plain text (raw cipher text string).
+       'timeOut'     : The time-out in seconds since epoch.
+   }
+
+   Note that the initialisation vector being generated by the application prevents a malicious server from being able
+   to choose pre-computed initialisation vectors to weaken the message encryption.
+
+4. The root server must make sure NOT TO LEAK decMsg (for the same reason as in message decryption). This is then
+   encrypted using the group permissions key and the inverted initialisation vector received from the client
+   (checking the group permissions is done even though there is no known security concern by allowing someone who
+   does not have the necessary permissions to create an encrypted message since encrypting using bad permissions
+   only results in creating an encrypted message which the user cannot decrypt, and the user should not have sent
+   the encryption request in the first place).
+
+5. The server sends the reply as a message in the following pseudo-form:
+
+   {
+       'decMsg'      : The single-encrypted plain text (raw cipher text string).
+       'encMsg'      : The double-encrypted plain text (the published text with start/end tags stripped).
+   }
+
+   Note that the initialisation vector used to encrypt the JSON object is inverted bitwise to ensure that the
+   same initialisation vector is not used twice.
+
+6. The contact then adds the start/end tags and group ID as appropriate to form the final encrypted message.
+
+2.2.3 Message decryption protocol
+
+The contact's process for decrypting messages is executed in the following order:
+1. Identify messages to decrypt using the start/end tags and discard them.
+2. Split these message(s) into its component parts: group ID, message initialisation vector, cipher text.
+3. Loop through all known groups to compare known group IDs to the group ID in the message
+   (this is where the fixed length of group IDs compared with group numbers comes in useful).
+4. Assuming at least one group match is found, check the group permissions locally to avoid unnecessary message
+   transmission and send all of these encrypted messages with their associated group numbers (as well as the
+   contact number) to the root HTTP message decryption server as a message in the following pseudo-form:
+
+   {
+       'accessToken'               : This authorises a specific contact number.
+       'textDecryptRequestObjects' : A list of published message request objects (see below).
+   }
+
+   The list of published message request objects is a list of objects of the following form:
+
+   {
+       {
+           'groupNumber' : group number 0
+           'ivString'    : initialisation vector 0 (for the published text).
+           'encMsg'      : cipher text 0
+       }
+                        ...
+       {
+           'groupNumber' : group number n-1
+           'ivString'    : initialisation vector n-1 (for the published text).
+           'encMsg'      : cipher text n-1
+       }
+   }
+
+5. For each message, the root server will check the relevant group permissions and decrypt using the permissions
+   key. The server MUST NOT LEAK the output of this decryption (otherwise a user who has had this group revoked
+   could obtain the plain text).
+6. For each message the root server will also check the message time-out; if the time-out check (or any other
+   check) fails then the server will set a boolean (for each message request) indicating that the decrypt request
+   has failed. The time-out field is always set whenever possible.
+7. The server will return lists of received messages with their single-decrypted counterpart and group ID to create
+   a message of the following pseudo-form:
+       
+   {
+      'textDecryptResponseObjects' : A list of published message response objects (see below).
+   }
+
+   The list of published message response objects is a list of objects of the following form:
+
+   {
+       {
+           'success'          : a boolean indicating if this decryption request was successful.
+           'groupNumber'      : group number 0
+           'ivString'         : initialisation vector 0
+           'encMsg'           : cipher text 0
+           'decMsg'           : raw cipher text 0
+           'timeOut'          : time-out 0
+           'encryptedGroupKey : group key required to obtain the message plain text.
+           'groupKeyIv        : initialisation vector to decrypt the encrypted group key.
+       }
+                             ...
+       {
+           'success'          : a boolean indicating if this decryption request was successful.
+           'groupNumber'      : group number n-1
+           'ivString'         : initialisation vector n-1
+           'encMsg'           : cipher text n-1
+           'decMsg'           : raw cipher text n-1
+           'timeOut'          : time-out n-1
+           'encryptedGroupKey : group key required to obtain the message plain text.
+           'groupKeyIv        : initialisation vector to decrypt the encrypted group key.
+       }
+   }
+
+   Note that the initialisation vector used to encrypt the JSON object is inverted bitwise to ensure that the same
+   initialisation vector is not used twice.
+
+8. The contact can then decrypt each dec_msg using the appropriate group key to obtain plaintext(s).
+
+2.3 Group IDs
+
+Here we try to achieve two properties:
+- Fixed length output for easy encrypted message manipulation/recognition,
+- Group ID uniqueness for all groups in existance. The server always creates a unique ID by comparing all other IDs
+  in its global database.
+
+Assuming that the group ID is 6 characters long and we use base-4096 characters (i.e. Base4352 characters excluding
+padding characters) this allows a total of 4096^6 = 4,722,366,482,869,645,213,696 unique group IDs, where likely
+number of group IDs generated before finding a collision is (4096^6)^(1/2) = 4096^3 = 68,719,476,736.
+Note that finding a collision is not a problem, since the server can just generate another new group ID.
+
+It is important to note that it is NOT the intention to ensure that the group name cannot be deduced from the message
+output, although this is unlikely to occur anyway.
+If an adversary manufactures a message which looks like it has been encrypted using a legitimate group ID then if a
+user tries to decrypt this message it will output some random message.
+
+2.4 Message time-outs
+
+The message time-out specifies a date at which an encrypted message no longer becomes able to be decrypted by
+anybody, regardless of any permissions set on the associated group. This notion of "expiring" messages is enforced by
+the server, which refuses to decrypt the ciphertext using its associated group permissions key, hence the security of
+the time-out feature is entirely dependent on the security of the permissions key of the group which created the
+message.
+
+Although every message specifies a time-out field, a time-out is not required for any message, i.e. a message which
+does not time out has a "zero" time-out.
+
+Time-outs are the number of seconds since epoch, universally defined to be 00:00:00 Thursday 1 January 1970.
+A message with no (zero) time-out is represented by precisely this date, i.e. a Java long value of 0.
+
+To reduce the number of bytes the time-out takes in the published text (as well as during transport), this time-out
+is represented using a fixed size of 5 bytes.
+If padding is required to ensure that the time-out is exactly 5 bytes, zero-byte block(s) are prepended.
+
+
+3 Server database tables
+3.1 Contact globals
+This stores information about a contact, constant for all other contacts.
+Each contact has a single row in this table.
+
+| Contact number INTEGER (PRIMARY KEY) | Contact ID TEXT | Contact name TEXT NULLABLE | Contact image BLOB NULLABLE
+| Password salt-hash BLOB NULLABLE | Password salt BLOB NULLABLE | Authentication salt BLOB NULLABLE
+| Encryption key salt BLOB NULLABLE | Public key BLOB NULLABLE | Encrypted private key BLOB NULLABLE
+| Encrypted private key IV BLOB NULLABLE | Recovery private key BLOB NULLABLE | Recovery private key IV BLOB NULLABLE
+| Device code BLOB NULLABLE | IP address TEXT NULLABLE | Email address TEXT | Activation time INTEGER |
+| Activation email time INTEGER | Recovery email time INTEGER | Sign-in email time INTEGER | Sign-in time INTEGER
+| Activation token ID TEXT NULLABLE | Access token ID TEXT NULLABLE | Refresh token ID TEXT NULLABLE
+| Recovery token ID TEXT NULLABLE | Sign-in token ID TEXT NULLABLE | Access token issued at INTEGER
+| Recovery IV BLOB NULLABLE |
+
+- Contact number	   : A monotonically increasing integer, which is used by other databases which
+                             require a reference to a specific contact.
+- Contact ID               : The globally unique random string displayed publicly.
+- Contact name 		   : The display name chosen by the contact.
+- Contact image            : The image associated with a contact, only modifiable with their permission.
+- Password salt-hash       : Used for user registration and sign-in.
+- Password salt            : Used to generate the password salt-hash (i.e. used to prevent rainbow table attacks).
+- Authentication salt      : Used to generate the contact's authentication secret.
+- Encryption key salt      : Used to generate the contact's password-derived data-encryption key.
+- Public key               : The public key used to encrypt a shared group key.
+- Encrypted private key    : The private key used to decrypt a shared group key, encrypted with the contact's data-
+                             encryption key.
+- Encrypted private key IV : The initialisation vector used by the contact to encrypt the associated private key.
+- Recovery private key     : The private key used to decrypt a shared group key, encrypted with the contact's device
+                             key, then encrypted again with the server's recovery-encryption key.
+- Recovery private key IV  : The initialisation vector used by the contact to encrypt the associated private key.
+- Device code              : The array of bytes used to identify a device, encrypted with the server's
+                             recovery-encryption key.
+- IP address               : The IP address last used by the contact to register or sign-in.
+- Email address            : Used to sign-in the contact and for recovery operations.
+- Activation time          : This is the most recent time, in milliseconds since epoch, that the account was
+                             activated. If the account has never been activated, i.e. a newly registered account,
+                             this value should be 0.
+- Activation email time    : This is the most recent time, in milliseconds since epoch, that an email was sent to
+                             this contact for account activation i.e. for account registration or requesting a new
+                             activation code.
+                             If a contact requests another activation email sent to them but the elapsed time since
+                             the previous email is too short, the request should be rejected.
+- Recovery email time      : This is the most recent time, in milliseconds since epoch, that an email was sent to
+                             this contact for account recovery.
+                             If a contact requests another recovery email sent to them but the elapsed time since
+                             the previous email is too short, the request should be rejected.
+- Sign-in email time       : This is the most recent time, in milliseconds since epoch, that an email was sent to
+                             this contact for signing in on a different device to the last device on which this
+                             contact signed-in or activated.
+                             If a contact requests another sign-in email sent to them but the elapsed time since
+                             the previous email is too short, the request should be rejected.
+- Sign-in time             : This is the most recent time, in milliseconds since epoch, that the contact signed in.
+- Activation token ID      : This is the JWT identifier for the only (currently) valid activation token.
+                             - This value is null iff the account is active.
+                             - This value is an empty string iff the account is inactive and there is no valid
+                               activation token issued.
+                             - This value is a non-empty string iff the account is inactive and there is a valid
+                               activation token issued.
+- Access token ID          : This is the JWT identifier for the only (currently) valid access token.
+- Refresh token ID         : This is the JWT identifier for the only (currently) valid refresh token.
+- Recovery token ID        : This is the JWT identifier for the only (currently) valid account recovery token.
+- Sign-in token ID         : This is the JWT identifier for the only (currently) valid sign-in token.
+- Access token issued at   : This is the first time an access token was issued with the corresponding access token
+                             ID.
+                             This is used to prevent a new access token ID from being generated every time an access
+                             token is requested; instead a new ID is only generated (and this value updated) when
+                             this issued-at value is far enough in the past.
+- Recovery IV              : The initialisation vector used by the server to encrypt all recovery data (for this
+                             contact) with the server's recovery-encryption key.
+
+There are a number of NULLABLE columns in this table which can store both null and non-null values during normal
+operation. Some null values, however, indicate that a contact has registered their account but never activated it;
+these values are:
+  - Contact name
+  - Contact image
+  - Password salt-hash
+  - Password salt
+  - Authentication salt
+  - Encryption key salt
+  - Public key
+  - Encrypted private key
+  - Encrypted private key IV
+  - Recovery private key
+  - Recovery private key IV
+  - Device code
+  - Recovery IV
+
+3.2 Known contacts
+This stores which contacts have been added as known contacts by a given contact. Each contact can have any number of
+target contact rows associated with it depending on the number of known contacts they have added.
+
+| Source contact number INTEGER | Known contact number INTEGER
+| PRIMARY KEY (source_contact_number, known_contact_number) |
+
+- Source contact number : The number of the contact who has added the known contact.
+- Known contact number : The number of the known contact who has been added by the source contact.
+
+3.3 Group globals
+This stores information about a group, constant for all other contacts.
+Each group has a single row in this table.
+
+| Group number INTEGER (PRIMARY KEY) | Group ID TEXT (UNIQUE) | Group image BLOB | Group name TEXT
+| Group reserved INTEGER | Permissions key BLOB | Permissions key IV BLOB
+
+- Group number       : A monotonically increasing integer, which is used by other databases which require a reference
+                       to a specific group.
+- Group ID           : The globally unique random string displayed publicly.
+- Group image        : The image associated with a group.
+- Group name         : A non-unique name for the group.
+- Group open         : An integer used as a boolean describing whether or not the group is open to search/join.
+- Permissions key    : The key bytes used by the server as the second message encryption key, encrypted by the
+                       server's permissions-encryption key.
+- Permissions key IV : The initialisation vector used to encrypt the permissions key.
+
+3.4 Group locals
+This stores group information which varies between contacts for the same group. Each contact can have any number of
+group rows associated with it depending on the number of groups they have access to.
+
+| Contact number INTEGER | Group number INTEGER | Group description TEXT | Group permissions INTEGER
+| Group selected INTEGER | Group key BLOB | Group key IV BLOB | Recovery group key BLOB | Recovery group key IV BLOB
+| PRIMARY KEY (contact_number, group_number)
+| UNIQUE (contact_number, description)
+| UNIQUE (contact_number selected) |
+
+- Group permissions is an integer such that:
+  - X00 : DENIED
+  - X01 : OWNER
+  - X02 : MEMBER
+  - X03 : ADMINISTRATOR
+  - X04 : DISTRIBUTOR
+  - Group permissions in the range 0 to 99 represent active groups, and 100 to 199 represent inactive groups,
+    e.g. a member of an inactive group has group permissions 102.
+
+- Group key             : The group key encrypted with the contact's data-encryption key.
+- Group key IV          : The initialisation vector used by the contact to encrypt the associated group key.
+- Recovery group key    : The group key encrypted with the contact's device key, then encrypted again with the
+                          server's recovery-encryption key.
+- Recovery group key IV : The initialisation vector used by the contact to encrypt the associated group key.
+
+3.5 Group shares
+This stores information required for sharing groups, including pending share requests and complete share requests.
+
+| Share status INTEGER | Share time INTEGER | Source contact number INTEGER | Target contact number INTEGER
+| Group number INTEGER | Encrypted group key BLOB | Public key BLOB
+| PRIMARY KEY (target_contact_number, group_number)
+
+- Share status is an integer describing one of the following:
+  * 0 : Pending - A request is waiting for approval/denial/failure from the target contact.
+  * 1 : Success - A group has been successfully shared.
+  * 2 : Failed  - Some error has occurred e.g. the public key unable to decrypt an encrypted group key.
+
+- Share time            : The time since epoch, in milliseconds, at which the group-share request was created or
+                          updated.
+- Source contact number : The number of the contact sharing the group (they must be a member of the group).
+                          A request from this contact's perspective is a "sent" request.
+- Target contact number : The number of the contact the source contact wants to share the group with (they must not
+                          be a member of the group).
+                          A request from this contact's perspective is a "received" request.
+- Group number          : The number of the group being shared.
+- Encrypted group key   : The group key encrypted with the target contact's public key.
+- Public key            : The public key used to encrypt the group key. After any necessary synchronisation, this
+                          should be the same as the public key stored in the contact globals table for the target
+                          contact.
+
+
+4 Core user operations
+4.1 Introduction
+The core user operations are invoked by the application. Note that the message encryption/decryption requests are
+omitted from this section as it has its own dedicated section.
+
+4.2 User registration
+This creates a new contact; for the purpose of this section the person attempting to create a new contact profile
+for themselves will be referred to as the contact, even though they are not yet a contact.
+
+1. The contact clicks the "register" text on the main screen to reveal a form containing the following required
+   fields:
+   * Email address
+
+   The application checks that the email address is a reasonable length and also that is is plausible and/or exists.
+
+2. The email address is sent to the server which performs the same checks and any additional checks on the email
+   address domain. If these checks pass the server generates a random contact ID and appropriate (unique) contact
+   number and inserts a contact row into the database, notably leaving many values as a default value or null e.g.
+   the contact's device code and authentication secret. The server then sends an email to the given email address
+   containing the activation code required to activate their account, thus proving that the contact has access to the
+   given email address. An OK success response then sent back to the application.
+
+4. If the response is OK, the application displays a registration success message and returns the application to the
+   sign-in screen (finishing the registration activity).
+
+4.3 Account activation
+An active account is required to sign in and for most server requests, so a contact must activate their account after
+registration.
+
+Any request to the server for active contact data should ignore inactive contacts. For privacy reasons, any exception
+messages (visible to the user) should not distinguish between a contact which has never existed and an inactive
+contact.
+
+4.3.1 New account activation
+This activates an account for the first time after registering it.
+
+1. The contact clicks the "submit token" text on the main screen to reveal a form containing the following required
+   fields:
+   * Activation token (received via email)
+   * Chosen password
+   * Repeated password
+   * Chosen contact name
+
+   The application should not only check that values are entered for every field and are not too short/long, but also
+   that values are valid, i.e. the correct character set is used.
+
+   The application then generates an authentication salt and encryption salt, and derives the authentication secret
+   using this authentication salt and the chosen password.
+
+   Additionally, if the application does not currently have a device code and device key stored on the device, it
+   generates and stores them. If a new device code/key is generated then after this point if any error occurs before
+   receiving an OK response from the server (either an application or server error) the application removes the
+   device code/key from the device. Note that for the device code this approach is taken rather than having the
+   server generate and return the device code because Android SharedPreferences may throw an exception when
+   attempting to store data but should not throw an exception when attempting to remove data. Additionally, the
+   (plaintext) device key should not be shared with any other device, including the server.
+
+2. These details (including a device code, regardless of if one is generated or not, and excluding the device key)
+   are sent to the server, which does some basic checks on the data. The mandatory server checks include making sure
+   that the values to input into the database are not too large (or small).
+
+   The server then generates a password salt and derives the password hash using this password salt and the received
+   authentication secret.
+
+3. If these checks succeed, the existing contact row is updated with the additional data and a new row is added to
+   the relevant groups table for this contact and the default group. An OK success response is then sent back to the
+   application.
+
+4. If the response is OK, the application displays a activation success message and the contact is now able to sign
+   in.
+
+4.3.2 Existing account activation
+This activates an account after it has previously been activated and subsequently deactivated.
+TODO.
+
+4.4 User sign-in
+Assumptions:
+  * If an adversary has access to both the application and last sign-in device they will only have full control of
+    the account if they also have access to JWTs sent to the corresponding email address.
+  * If an adversary has access to both the application and email passwords for a user then they have full control of
+    the account because they are able to recover the account and change the password.
+
+  * Each time the user signs in a new data-encryption key should be generated, stored in the relevant database,
+    and sent to the user.
+    ? This should also be done when a user receives a encryption/decryption response from the server.
+
+  * Possible ways an adversary could gain access to a contact's private keys include:
+    * Stealing their contact name and password. They will still be unable to sign in on a new device unless they also
+      have access to the corresponding email account, but if they can obtain the contact's private keys from the
+      database then they can derive the data-encryption key and decrypt the keys. The next time the legitimate
+      contact signs in they will generate a new data-encryption key but the adversary could do the same thing, so the
+      only option for the contact to deny access for the adversary is to change their password.
+    * Using malware installed on the device to extract sensitive data from memory. To reduce the affect of this the
+      group keys should not be stored on the device but rather requested for every encryption/decryption request.
+      Furthermore the data-encryption key (and other sensitive data such as the access/refresh token) should be
+      stored encrypted on the device such that the decryption key is in the device's keystore.
+    * Using malicious firmware on the device to extract sensitive data from memory and the keystore. This is similar
+      to the malware case except that the keystore is now unprotected.
+
+Below is the list of things which happen when a user signs-in with correct credentials:
+  * The user is signed-out of any other device which they are signed-in to (or they are otherwise prevented from
+    using the account in any meaningful way until they sign in again).
+  * The server updates its record for the user's device code (used in account recovery).
+  * The contact regenerates all of their cryptographic-related data, and the server replaces the old versions with
+    this new data.
+
+The goal of this sign-in protocol is to prevent any possibility for the server to access any group key, for example
+by stealing the contact's password during the sign-in authentication stage.
+
+1. The contact requests the salt used to derive its password-authentication secret. Note that this request does not
+   require a password as the server's return message is not secret.
+
+       {
+           'emailAddress' : The unique email address of a contact used to authenticate with the server.
+       }
+
+2. The server responds with the salt:
+
+       {
+           'authSalt'    : The salt the contact uses to generate the secret required to authenticate with the server.
+       }
+
+3. The contact then derives their authentication secret from their password and authentication salt and sends this
+   with their email address (known as their "credentials") to the server to authenticate. Note that the
+   authentication secret can be used maliciously by the server to authenticate as the user, but they still do not
+   have access to the plain text password of the contact and hence cannot obtain the data-encryption key used to
+   encrypt the group keys (amongst other information).
+
+   The contact now has two options to sign in:
+
+   3a. The contact is signing in on the same device they last signed-in (or activated their account) on.
+       The contact sends a message in the following pseudo-form:
+       {
+           'emailAddress' : The unique email address of a contact used to authenticate with the server.
+           'authSecret'   : The authentication secret derived from the contact's password and authentication salt.
+           'deviceCode'   : The array of bytes indicating the device the contact last signed-in (or activated their
+                            account) on.
+           'sign-in code' : null.
+       }
+
+   3b. The contact is signing in on a different device from the one they last signed-in (or activated their account)
+       on.
+       The contact sends a message in the following pseudo-form:
+       {
+           'emailAddress' : The unique email address of a contact used to authenticate with the server.
+           'authSecret'   : The authentication secret derived from the contact's password and authentication salt.
+           'deviceCode'   : The array of bytes indicating the device the contact is signing in on (this can be any
+                            device).
+           'sign-in code' : The JWT sent to the contact's email address the last time they attempted to sign-in on a
+                            new device.
+       }
+
+   Note that the device code is required both for identifying which device is signing in and for account recovery.
+
+4. After checking that the request is not malformed, the server does the following checks based on the message it has
+   received:
+
+   4a. The sign-in code is null: The contact is either signing in on the same device which they last signed-in or
+       registered their account from, or they are signing in on a different device and require a sign-in code.
+       The server must perform the following checks before the sign-in resources can be retrieved:
+       1. The contact's account is active.
+       2. The credentials are verified; if the verification fails then the protocol is aborted.
+       3. The given device code is checked against the device code associated with the email address from the
+          database; if both device codes are not the same then one of the following error responses is returned:
+          * Sign-in not possible at this time - Returned if a new sign-in code cannot be sent to the given email
+                                                address e.g. because a sign-in code has been issued too recently.
+          * Sign-in code required - If a sign-in code can be sent to the given email address, the contact must
+                                    confirm they with to receive it.
+
+            * The sign-in code is a JWT with the contact number as the subject. This allows a (stolen) sign-in code
+              to be used to sign in on any device (with the matching email address and password) but prevents an
+              adversary with the valid email address and password from using a sign-in code request as a form of
+              denial-of-service (since only one sign-in code can be requested every X hours).
+ 
+       * Checking the credentials before the device code means that an adversary will be able to check if a given set
+         of credentials is valid from any device, as well as if there is the possibility receiving a sign-in code at
+         the given email address.
+         This is avoidable if the checks are reversed, however doing so would mean that an adversary would be able to
+         determine if a contact last signed-in (or activated) on a given device without knowing the account
+         password.
+
+   4b. The sign-in code is non-null: The contact is signing in on a different device from the one which they last
+       signed-in or activated their account from.
+       The server must perform the following checks before the sign-in resources can be retrieved:
+       1. The credentials are verified; if the verification fails then the protocol is aborted.
+       2. The sign-in code is verified; if the verification fails then the protocol is aborted.
+       3. The contact number in the sign-in code is checked against the contact number associated with the email
+          address from the database; if the both numbers are not the same then the protocol is aborted.
+
+       If all of these checks pass, the device code is encrypted using the server's recovery-data-encryption key (and
+       the associated initialisation vector for the contact) and stored in the contact_globals table. The encryption
+       ensures that only the given device (and the server) has access to the device code and thus only this device
+       can initiate an account-recovery request.
+
+       * For the cases where the sign-in code validation fails or the contact numbers do not match the same error
+         response message must be returned. This prevents the unlikely scenario where an adversary is able to forge a
+         sign-in code without knowing the contact number which they generated the code for, or the more likely
+         scenario where an adversary obtains a sign-in code for an arbitrary account and uses it to sign in on an
+         account they have the correct credentials for but do not have access to the associated email account.
+         In any case, there is no good reason a contact should be supplying valid credentials with a verifiable
+         sign-in code which have different contact numbers, so the error messages are the same for this reason.
+       * If the credentials fail to verify a different error response message can be returned because there are
+         already other ways of determining if a set of credentials are valid, e.g. by signing in without a sign-in
+         code, and a contact may legitimately attempt to sign in with mistyped credentials.
+
+   The server treats the authentication secret like it would do a plain text password: it is combined with a
+   (different) password-storage salt and compared with the value associated with the contact name in the database. If
+   they are the same then the user is authenticated.
+
+   The server then sends the contact their sign-in resources:
+
+       {
+           'accessTokenData'       : the client-specific access token, with an expiration date.
+           'refreshToken'          : the client-specific refresh token.
+           'groups'                : groups JSON array
+           'currentContact'        : contacts object
+           'knownContacts'         : contacts JSON array
+           'extendedContacts'      : contacts JSON array
+           'allContactsLoaded'     : true <==> all contacts are loaded for the group_number, false otherwise.
+           'encSalt'               : the salt used to generate the password-derived data-encryption key.
+           'groupShares'           : group-shares JSON array
+           'encryptedPrivateKey'   : the private key used to decrypt encrypted group keys (for group-shares).
+           'encryptedPrivateKeyIv' : the initialisation vector used to decrypt the encrypted private key.
+       }
+
+5. If the client receives a server error or an error caused by the contact supplying an invalid email address and/or
+   authentication secret, an appropriate message is displayed to the user and the protocol is aborted.
+
+   If the contact supplied valid credentials but they were forbidden from signing in then it was cause by one of the
+   following:
+   * Inactive account      - The contact must activate their account before they can sign in.
+                             The protocol is aborted.
+   * Invalid sign-in code  - The code is considered invalid if it does not validate or it is not associated with the
+                             given email address.
+                             The protocol is aborted.
+   * Too many requests     - A sign-in code is required but cannot be generated because another code was generated
+                             too recently.
+                             The protocol is aborted.
+   * Sign-in code required - A sign-in code is required and is available to be generated.
+
+     (5a.) In this case the contact can choose to have a sign-in code sent to their email address but they should be
+     warned that they may not want to because a code can only be generated once every X hours (e.g. a contact may
+     have last signed in on DEVICE1, want to sign in on DEVICE2 and then sign in again on DEVICE1 in a short period
+     of time, but this is prevented).
+
+     To request a sign-in code the contact should send a message in the following pseudo-form:
+     {
+         'emailAddress' : [see above]
+         'authSecret'   : [see above]
+     }
+
+     The server will then validate these credentials, check that the contact is active and check that the last
+     sign-in email was not sent too recently. If all of these checks pass, a new sign-in code is generated and sent
+     in an email to the given email address. The server then sends a response OK response to the client.
+
+     Regardless of whether an OK or error response is received, the protocol is terminated at this point and the
+     user will have to choose to sign in again.
+
+   If the client received an OK response when attempting to sign in, the sign-in resources are checked and the
+   contact uses the received encryption salt to derive the password-derived data-encryption key used to encrypt all
+   of their sensitive information, such as group keys, and decrypts the received resources.
+
+   To ensure that salt-derived information does not remain static for too long the contact initiates an account-
+   resources regeneration request (aka an update-crypto-data request):
+   The contact regenerates the authentication salt and encryption salt, generates a new authentication secret and
+   re-encrypts all encrypted information. Any asymmetric-encrypted group keys are also re-encrypted; this may fail
+   since group-share requests store keys encrypted by the contact who was the source of the request, so each
+   group-share in the list contains a 'status' indicating (among other things) if re-encryption has failed.
+
+       {
+           'accessToken'          : Required for the server to save the new salts and encrypted resources.
+           'publicKey'            : The public key used to encrypt group keys for group sharing.
+           'encryptedPrivateKey'  : The private key used to decrypt group keys for group sharing, AES-encrypted with
+                                    the contact's data-encryption key.
+           'privateKeyIv'         : The contact's initialisation vector used to encrypt/decrypt the associated key.
+           'recoveryPrivateKey'   : The private key used to decrypt group keys for group sharing, AES-encrypted with
+                                    the contact's device key.
+           'recoveryPrivateKeyIv' : The contact's initialisation vector used to encrypt/decrypt the associated key.
+           'authSecret'           : The new authentication secret the server should salt and hash.
+           'authSalt'             : The new authentication salt the server should store.
+           'encSalt'              : The new encryption salt the server should store.
+           'allGroups'            : A list of objects each containing:
+                                    * The associated group number.
+                                    * The group key encrypted with the contact's data-encryption key,
+                                    * The new initialisation vector.
+           'allRecoveryGroups'    : A list of objects equal in size and equivalent to 'allGroups' except with the
+                                    group keys encrypted with the contact's device key.
+           'validGroupShares'     : A list of objects each containing:
+                                    * The associated group number.
+                                    * The (new) RSA-encrypted group key.
+       }
+
+   Note that the initialisation vectors are allowed to be regenerated even though the private key and group keys are
+   encrypted with a new key. The initialisation vectors are also regenerated for recovery data when the private key
+   may be the same (see notes below).
+
+6. The server checks the access token, generates a new password-storage salt and uses it with the new authentication
+   secret before storing the result in the database. The authentication salt, encryption salt and encryption group
+   keys are all also stored in the server databases. The server MUST either store all of the new contact data or none
+   of it.
+
+   All recovery data encrypted by the contact is encrypted again using the server's recovery-data-encryption key (and
+   the associated initialisation vector for the contact) and stored in the relevant tables. The encryption ensures
+   that a database breach cannot be used by a contact to retrieve their recovery data without authorisation from the
+   server.
+
+   Since the time between a contact receiving their sign-in data from the server and the server updating the
+   contact's cryptographic data may be delayed a (small) number of seconds, it is possible that another contact has
+   requested to share a group with this contact (and encrypt the group key) by using the public key before it was
+   regenerated and updated. Therefore these group-shares also need to be updated by re-encrypting their encrypted
+   group keys, so the server checks all pending-received group-shares for this contact to see which public key was
+   used to encrypt the associated encrypted group key:
+   * If the public key is the new version is it ignored.
+   * If the public key is the previously stored version is is added to the return list to send back to the client.
+   * If the public key is not the new version or previously stored version the group-share is stored as failed and
+     added to the return list to send back to the client.
+
+   The server returns a message in the following pseudo-form:
+
+       {
+           'obsoleteGroupShares' : A list of objects each containing:
+                                   * The list of obsolete group-shares whose group-keys need re-encrypting.
+                                   * The list of failed group-shares.
+       }
+
+7. The client re-encrypts the list of obsolete group-shares and sends a message to the server in the following
+   pseudo-form:
+
+       {
+           'publicKey'           : The (new) public key used to encrypt the group keys.
+           'validGroupShares'    : A list of objects each containing:
+                                   * The associated group number.
+                                   * The (new) RSA-encrypted group key.
+           'invalidGroupShares'  : A list of objects each containing:
+                                   * The associated group number.
+       }
+
+   Note that the client currently ignores the returned failed group-shares since failed-received group-shares are not
+   displayed.
+
+8. The server updates the group-shares in the same way as when the cryptographic data was previously updated,
+   checking that the received public key matches the stored public key; iff this is true then an OK response is
+   returned to the client.
+
+9. Only after receiving an OK response does the application store all of the global statics, such as the password-
+   derived data-encryption key and access/refresh tokens, and proceed to the main activity screen.
+
+Notes:
+  * 3 different salts are required: the authentication salt and encryption salt for the application and the password
+    (storage) salt for the server.
+  * Even though the device keys are static (for each device), the initialisation vectors used by the contact to
+    encrypt their recovery data are regenerated at the same time as the rest of the cryptographic data is updated/
+    regenerated. This is done as a minor precaution in case a contact signs-in on another device and the two (or
+    more) devices which they have signed in to in the past and present coincidentally have the same device key, thus
+    encrypting the same (recovery) data with the same device key and initialisation vector would produce the same
+    ciphertext, indicating to the server or an adversary that two devices have the same key.
+  * Either the user-generated initialisation vectors and/or the server's recovery initialisation vector (a separate
+    one for each contact) should be regenerated (in this case it is the user-generated initialisation vector only) to
+    ensure that the resulting server-encrypted recovery data is different to any previous server-encrypted recovery
+    data, so that any adversary with access to the database is unable to determine if a contact has signed-in on the
+    same device as a previous sign-in session.
+
+4.5 Group creation
+This operation is fairly simple cryptographically, in essence the group key is generated by the user who creates the
+group, it is encrypted using the symmetric data-encryption key derived from the user's password, and sent to the root
+server for storage.
+
+The user executes following in order:
+    1. Check the input data is valid, and check that the contact is below the number of groups limit.
+
+    2. Generate a group initialisation vector and symmetric group key, and use the initialisation vector and
+       data-encryption key to encrypt the group key.
+
+    3. Create an object containing all group attributes before creating a message to send to the server in the
+       following pseudo-form:
+
+       {
+           'accessToken'          : This authorises a specific contact number.
+           'groupName'            : The global name the contact has chosen for this group.
+           'groupDescription'     : The local description the contact has chosen for this group.
+           'encryptedGroupKey'    : The group key encrypted with the contact's data-encryption key.
+           'initialisationVector' : The initialisation vector used to encrypt/decrypt the group key.
+           'open'                 : A boolean indicating whether the group should be open or not.
+       }
+
+    4. The server performs various checks on the received message, and if successful a random group ID is generated.
+       If by random chance the group ID is already in use for an existing group then the server returns an internal
+       server error with no additional information in order to not reveal anything about the server's internal random
+       number generation.
+       In the highly probable case that the group ID is unique, the server inserts one row into the group globals
+       table and one row into the group locals table.
+
+    5. The server then returns the following to the calling contact:
+
+       {
+           'groupNumber'           : The new group number for the new group.
+           'groupId'               : The new group ID for the new group.
+           'numberOfContactGroups' : The number of groups the contact has access to.
+       }
+
+    6. Upon receipt of the message, the contact creates the new group object, adds it to internal memory, and
+       displays a success or failure message.
+
+Assumptions:
+- The server creates the group ID and assigns the new group a new number.
+- The group key is created by the user who created the group.
+- The group key can only be known by members of the group, not the server.
+- Group information is stored by the server (in encrypted form wherever necessary) and sent to the user upon sign-in,
+  or message encryption/decryption in the case of the encrypted group key.
+
+4.6 Contact and group requests
+4.6.1 Two-step requests
+A standard request from any given contact to the server will be for one of the following:
+  1. All target contacts (i.e. known an extended contacts).
+  2. Group target contacts (the same as 1. but for a specific group which the given contact and target contacts are
+                            all a member of).
+  3. All groups (which the given contact is a member of).
+  4. Contact groups (the same as 3. but for a specific contact such that this contact and the given contact are
+                     members of all of the returned groups).
+  5. Other contacts (extended or unknown contacts).
+
+When the application initiates one of these requests with the server, the response should also contain a number of
+group numbers for each contact (if contacts were requested) or contact numbers for each group (if groups were
+requested). These additional contact and group numbers are the group-contacts and contact-groups which relate to
+both the contact/group the number represents and the requesting contact.
+
+Once the response from this first request is verified to be valid, a second request is sent for the additional
+contact-groups or group-contacts using the numbers received in the first response (aka a chosen groups or chosen
+contacts request). These groups or contacts are then loaded by the application the same way in which the initial
+contacts or groups were.
+
+Note that the application should always check if the relevant contacts/groups are already displayed for a given
+adapter and discard these from the first request, and also check if the relevant groups/contacts are already loaded
+for the whole application and discard these from the second request. This means that the first request will always
+request the maximum number of contacts/groups (although fewer may be received) but the second request can request
+fewer than the maximum number of groups/contacts.
+
+* First response max item count: 50.
+* Second response max item count: 2500 = 50*50 = (# initial contacts/groups) * (# contact-groups/group-contacts).
+
+4.7 Account recovery (recovering an account without a password)
+4.7.1 Overview
+If a user cannot remember their password they can choose to recover their account and change their password.
+All of the following requirements must be satisfied for a successful account recovery operation:
+  * The user must know their sign-in email address.
+  * The user must have access to the given email address (to receive a recovery code).
+  * The user can only attempt to recover their account using the last device which they have previously signed in to.
+    * If the user has never signed in then this is the device which they registered their account with.
+
+Account recovery is not required for a registered account which has never been activated since registration does not
+require a password.
+
+4.7.2 Protocol
+The following steps detail what happens during account recovery:
+  1. The user enters the email address for the account they wish to recover.
+
+  2. The device retrieves its device code stored on the device and sends a message to the server in the following
+     pseudo-form:
+
+     {
+           'emailAddress' : The email address associated with the account to recover.
+           'deviceCode'   : The unique value identifying the device.
+     }
+
+  3. The server checks that the contact has not successfully requested a recovery or password-change code too
+     recently, and that the email address matches the device code; if they do not match then the protocol is
+     aborted, otherwise the server generates a recovery code and sends it to the given email address (as well as
+     updating the stored recovery token ID and recovery email time).
+
+  4. The user obtains the recovery code from the email. When the user chooses to recover their account they are
+     prompted to enter (and re-enter) a new password. Once this new password has been checked, the client sends a
+     message to the server in the following pseudo-form:
+
+     {
+           'recoveryCode' : The string used to recover an account on a specific device.
+           'deviceCode'   : [See above]
+     }
+
+  5. The server validates the recovery code and checks that the device code matches the value stored in the database
+     for the contact; if either check fails then the protocol is aborted. Otherwise, the server retrieves all of the
+     contact's recovery data from the database, decrypts it using the server's recovery key and returns a message in
+     the following pseudo-form:
+
+     {
+           'recoveryPrivateKey'   : The private half of the key used to share groups, encrypted by the recovery key.
+           'recoveryPrivateKeyIv' : The initialisation vector used to encrypt the recovery private key.
+           'recoveryGroupKeys'    : A list of objects each containing:
+                                    * The associated group number.
+                                    * The group key encrypted by the recovery key.
+                                    * The initialisation vector used to decrypt the recovery-key-encrypted group key.
+     }
+
+  6. The client generates a new authentication salt, derives a new authentication secret from it. A new encryption
+     salt is also generated and used to generate a new data-encryption key; this key is then used to encrypt the
+     decrypted recovery data. The client sends another message to the server in the following pseudo-form:
+
+     {
+           'recoveryCode'          : [See above]
+           'deviceCode'            : [See above]
+           'encryptedPrivateKey'   : The private half of the key used to share groups, encrypted by the
+                                     data-encryption key.
+           'encryptedPrivateKeyIv' : The initialisation vector used to encrypt the private key.
+           'allGroupKeys'          : The same as above except the group key is encrypted with the data-encryption
+                                     key.
+           'authSecret'            : The authentication secret derived from the contact's password and authentication
+                                     salt.
+           'authSalt'              : The salt the contact uses to generate the secret required to authenticate with
+                                     the server.
+           'encSalt'               : The salt used to generate the password-derived data-encryption key.
+     }
+
+  7. The server validates the recovery code and device code again (see above). The server then generates a new
+     password salt, derives the new password hash via SCrypt using the password salt and the given authentication
+     secret, and replaces the following database values for the contact:
+     * password hash
+     * password salt
+     * authentication salt
+     * encryption salt
+     * encrypted private key and associated initialisation vector
+     * all encrypted group keys
+
+     If there is any discrepancy between the existing group numbers for the contact and the new group numbers for the
+     contact, then a conflict response code is returned and the user is asked to re-submit their recovery code (step
+     4) with a warning about possible malicious activity using their account.
+
+  8a.If the user is currently signed in, as is the case for a password-change request, the server generates a new
+     access and refresh token, and stores the two token IDs, along with the access-token-issued-at time, in the
+     database.
+
+     The server invalidates the recovery token (ID) and returns an OK response.
+
+  8b.If the user is not currently signed in, as is the case for a recovery request, the server invalidates the
+     recovery, access and refresh tokens (IDs) and returns an OK response.
+
+     * See the Security section below for a justification of why other tokens are not invalidated.
+
+4.7.2.1 Protocol Assumptions
+The above protocol is based on the following assumptions:
+* The following data is created/regenerated during the sign-in operation and stored on the server:
+  * The recovery private key    - This private key used for group sharing is encrypted by the symmetric device key.
+  * The recovery private key IV - The initialisation vector used to encrypt the recovery private key.
+  * Multiple recovery group keys    - (One of the) group keys, encrypted by the symmetric device key.
+  * Multiple recovery group key IVs - The initialisation vector used to encrypt the associated recovery group key.
+* The following data is created/regenerated during the sign-in operation and stored on the device:
+  * The device key     - The symmetric key used by each device to encrypt the recovery data.
+                         This is stored encrypted on the device.
+  * The device key IV  - The initialisation vector used to encrypt the device key stored on the device.
+* The following data is created/regenerated during registration and stored on the device:
+  * The device code    - The value used to identify each device.
+                         This is stored encrypted on the device AND on the server.
+  * The device code IV - The initialisation vector used to encrypt the device code stored on the device.
+* Each device has a single device code, regardless of the number accounts which have signed into it, and every device
+  code is unique.
+* When the server verifies a recovery code it also verifies that the contact number in the recovery code has a device
+  code which matches the device code provided in the request (as well as verifying that the stored recovery code ID
+  matches the JWT to ensure that only one recovery code is ever valid at one time, similar to how other JWTs are
+  verified). This ensures that the source of the request has access to the (secret) device code and that it matches
+  the code the server expects.
+
+4.7.3 Security
+One reason for only allowing a user to recover their account from a single (their last) device is to prevent an
+adversary using up potentially infinite database space by signing in on an arbitrary number of devices, however the
+main reason is to prevent previously signed-in devices from being used to compromise an account if a previous device
+is compromised; this prevents cases where a user has discarded/recycled a device, potentially with an old operating
+system version on it, which has then been restored by an adversary.
+
+The following scenarios consider what an adversary could achieve given different levels of access to a user's data.
+
+* If an adversary does not have control of the email account associated with the email address, they cannot gain
+  control of the account because they will not have the recovery code.
+  * In this case the legitimate user should be able to change their password and recover their account, even though
+    the adversary can sign-in and gain access to all of their cryptographic data, and deny the adversary any further
+    access to the account.
+  * The outcome of this scenario does not change if the adversary has unlimited control over the device
+    (unless gaining control of the device also gains control of the email account), even if this control allows
+    them to install any malicious software and read all secret data stored or processed by the device. In such a
+    scenario the account owners's only option is to attempt an account recovery.
+* If an adversary has control of the email account associated with the email address but does not have control of any
+  device which has previously signed in with the given email address, they cannot gain control of the account
+  because they will not have the device code.
+  * In addition to the above conditions if the adversary also has obtained the device code (via a database hack or
+    some other means) they will be able to obtain the recovery data from the server but cannot decrypt it without the
+    AES key stored on the device.
+* If an adversary has control of the email account associated with the email address and also has any amount of
+  control over a device which has previously signed in with the given email address, they are able to gain control of
+  the account, since an adversary will be able to sign-in or recover the account at-will.
+
+One-time use tokens, other than the recovery token, which are sent via email (i.e. activation and sign-in tokens) are
+not invalidated since this would prevent a legitimate user from using a valid token which has not expired after their
+account has been recovered.
+
+* The activation token does not need to be invalidated because (part of) its purpose is to prove that the user is the
+  owner of the given email address.
+  * If a malicious user creates an account using another user's email address, if they also have access to this email
+    address then there is no way to distinguish the adversary from the legitimate user and the account is created
+    without the genuine email account holder's permission.
+  * If the legitimate user registers an account but an adversary gains access to the email account before it can be
+    activated then this is not deemed a problem because it is assumed that the legitimate user wishes to activate
+    their account since they registered it.
+  * If the legitimate user registers an account but changes their mind about using it before activating it, if an
+    adversary activates it on their behalf they will be unable to sign in unless they have access to the legitimate
+    user's account. If they attempt to recover the account this will trigger an email message notifying the
+    legitimate user of the account's activity.
+  * If a user's account is deactivated and they wish to reactivate it then this requires the account password as well
+    as access to the email account which only a legitimate user should have (see sign-in token comments below).
+
+* The sign-in token does not need to be invalidated because it cannot be used to sign in without the correct
+  password, but it is assumed that no adversary could know the password if it has just been regenerated via the
+  account recovery operation. If an adversary has access to both the application account and email account then there
+  is no way to distinguish the adversary from the legitimate user and the account is beyond recovery.
+
+Note that the XMPP server's authentication mechanism does not currently [as of 12/11/2020] validate the access
+token's 'issued at' value since it has no access to the database.
+* This means that a malicious user which had an old access token can still use it to sign-in to the XMPP server which
+  can be used to continuously sign-out the genuine user until the access token expires.
+* This also allows the server to have a non-expiring XMPP access token which never needs reissuing.
+
+4.8 Password changing
+4.8.1 Overview
+If a user wishes to change their account password for whatever reason, e.g. they suspect that their password has been
+compromised, they can choose to change it. There are a few approaches which are widely used across the internet:
+  * The account owner enters their existing password along with their new password.
+  * The account owner enters some secret code sent to a device (which they also own) along with their new password.
+  * A combination of the above (the existing password and a secret code are entered along with their new password).
+
+This application chooses to use the second approach.
+
+One (incorrect) argument against using the second approach compared to approaches one and three is that approach two
+does not require the user to know their existing account password before replacing it, therefore if their device is
+physically hijacked the malicious user could attempt to obtain the secret code, and if the legitimate account owner
+is also signed in to their email account on the same device the malicious user could successfully change the account
+password. However, this argument does not consider the way in which an account can be recovered without a password
+(i.e. by using the same device and corresponding email account access), which would be just as easy to accomplish for
+the malicious user given the same assumptions, therefore the second approach is not weaker in this use-case.
+
+The third approach adds more security than the first approach but no more than the second approach. Given the
+use-case where a malicious user has physically hijacked the device, does not have access to the corresponding email
+account but does know the account password, the malicious user will be able to successfully change the password using
+the first approach but will be unable to change the password using the second or third approach.
+
+One advantage of the second approach over the first and third approach, in terms of user convenience, is that the
+account owner may have forgotten their existing password. In this case, the account owner can choose a new password
+without signing out of their account, as is required for an account recovery operation. The user may accidentally
+enter a new password which they think is something else (i.e. user input error) and not find out about it until much
+later since they do not have to sign in immediately after changing the password (which is the case when recovering an
+account since the user would be signed-out); should the user sign out and fail to sign in again, an account recovery
+operation can still be initiated which is no different to the first approach given that the contact has forgotten
+their existing password.
+
+4.8.2 Protocol
+The following steps detail what happens during a password-change request:
+  1. The user requests that a recovery code is sent from the server to their corresponding email address via a
+     request with the following pseudo-form:
+
+     {
+           'accessToken' : The access token associated with the contact's current sign-in session.
+     }
+
+
+  2. The server validates the access token; if the token is valid and the contact has not successfully requested a
+     recovery code too recently, the server generates a recovery code and sends it to the email address associated
+     with the given contact number obtained from the access token (as well as updating the stored recovery token ID
+     and recovery email time).
+
+  3. From this point onwards the protocol continues in the same way as the account recovery protocol.
+     See section 4.7.2 step 4.
+
+4.8.2.1 Protocol Assumptions
+The above protocol is based on the following assumptions:
+* The contact is currently signed-in when requesting the password-change code. This also justifies not requiring the
+  existing password to change it because if the account is already signed in then it is assumed that this is the most
+  recent sign-in device (if their account has signed-in more recently on another device then the access token on this
+  device should be invalid an the request should fail). Therefore the account could be recovered from this device
+  (and the password changed) without the password anyway, providing the user has access to the associated email
+  account.
+* The contact's current sign-in session is the most recent sign-in session. This implies that contact's stored device
+  key matches the device key used to encrypt the the recovery-encrypted private key. The contact's current sign-in
+  session is checked by the protocol by sending the device code when requesting the recovery data.
+* See section 4.7.2.1 for additional protocol assumptions which apply from section 4.7.2 step 4.
+
+4.8.3 Security
+Almost all server requests which occur while the user is signed in require an access token however the get and set
+password-change data requests do not. Consider the case where an adversary possesses a contact's device code and
+password-change code, both of which are required for a legitimate get or set request, and the legitimate contact is
+signed in on another device. Upon successfully setting the password-change data, the adversary immediately receives a
+valid access and refresh token rendering the legitimate user unable to use their account; this however is no
+different to the adversary initiating a recovery request (given they have the device code and recovery code) and then
+signing in to obtain a valid access and refresh token, again rendering the legitimate user unable to use their
+account.
+* From the application side there is one difference which is that an adversary completing a recovery request and then
+  signing in to the application will create a new XMPP connection causing the legitimate user to receive a message
+  indicating that another user has signed in, whereas an adversary completing a password-change request will not
+  close the existing XMPP connection. In the second case, the legitimate user should receive an unauthorized server
+  response every time they use their access token, indicating that they should sign out and in again, at which point
+  they will be unable to sign in leaving them in the same situation as in the malicious recovery request case.
+
+Another reason for not requiring the access token when getting or setting the password-change data is because if an
+adversary already possesses a contact's device code and password-change code then their account is considered
+compromised beyond recovery; the adversary has somehow obtained the contact's password-change code (either by having
+access to their email account or through coercion) and has access to the device code (which does not change) implying
+they have some amount of root access to contact's device since the device code is not otherwise obtainable via the
+application.
+
+
+5 Android GUI
+5.1 User functions
+5.1.1 Select group
+The currently selected group is displayed in the Workspace tab. A group can be selected in one of three ways:
+
+  1. Tapping the "Select group" option in the overflow menu (starts the GroupSelectionActivity).
+  2. Tapping the currently selected group in the Workspace tab (starts the GroupSelectionActivity).
+  3. Tapping the "Select group" button in the GroupDetailsActivity (only confirms selection).
+
+5.1.2 Add contact
+A contact who has not been added is only known to the user via one of two ways:
+  1. The user has at least one group in common with the contact; known as an "extended" contact.
+  2. The user explicitly searches for the contact; known as an "unknown" contact.
+
+Once a contact is added, the user can tap on a contact to open a new activity showing the following:
+  1. Contact image
+  2. Contact name
+  3. A button allowing the user to share a group with the contact.
+  4. A list of groups which both users have in common (if any).
+
+An extended contact can also be selected, showing the following:
+  1. Contact image
+  2. Contact name
+  3. A button allowing the user to add the contact
+  4. A list of groups which both users have in common.
+
+The add contact search search facility allows an unknown contact to be searchable via their unique contact name,
+and added, thus allowing a known contact to initially have no groups in common with the user.
+
+No consent is required to add a contact, but an alert should be displayed to the added contact informing them
+that the have been added as a contact by user X (the contact name must be URL-safe base64, so it is clear what
+the user's name is just by reading the alert).
+
+5.1.3 Share group
+5.1.3.1 Protocol description
+* Contact "X" wants to share a group with contact "Y":
+  1.  X requests (and receives) Y's public key-encryption key from the server (via HTTP), and the (encrypted) key of
+      the group they want to share.
+      * The server must check that X has permission to use and share the group they (claim to) want to share.
+
+  2.  X encrypts the group key with Y's public key-encryption key and sends the encrypted group key, and the public
+      key used to encrypt it, to the server (via HTTP).
+      The server stores the encrypted group key as a new row in the "group_shares" table.
+      (X can display "share pending" in the app however they wish if the HTTP return status is OK).
+
+      * The server must check that X has permission to use and share the group they (claim to) want to share.
+      * The server must check that the public key X claims to have used is the same public key found in the database
+        (it is possible these are out-of-sync if Y regenerates their keypair after X requests Y's public key).
+        This should be checked whilst inserting/updating the valid table row to ensure that the public key is valid
+        when the database is modified (note that if the public key is invalid this is functionally the same as a
+        failed group-share). For this case, an appropriate message is returned to X and they are invited to retry the
+        share request.
+      * The server must check that Y does not already have a group_locals row for the same group.
+
+      * If a (pending) row needs to be inserted and there is already a row with the same target_contact_number and
+        group_number the following should occur depending on the row's existing share_status:
+        * Success - The operation is aborted and an error returned, since the group has already been shared.
+        * Pending - The operation is aborted and an error returned.
+                    If a malicious contact intentionally sabotages their own encrypted_group_key permanently (a form
+                    of denial-of-service for the group when the legitimate contact regains control of their account),
+                    this counts as a group-share failure if the target contact accepts the request and the share is
+                    no longer pending.
+        * Failed  - The row is updated with the new encrypted_group_key, share_time, (pending) share_status, public
+                    key and source contact number, and the protocol continues. Any record of the failed (malicious)
+                    group-share will be overwritten.
+
+      The server also sends an XMPP message to Y indicating that X has requested to share a group with Y.
+
+  3.  If the share request is successful, the server sends X the associated object which is then loaded by X as a
+      pending-sent group-share.
+
+  4a. If Y currently has an XMPP connection, Y can choose to accept or reject the new group.
+      * If they choose to accept then they must request the RSA-encrypted group key from the server, before choosing
+        a description for the group, and decrypting the received group key and AES-encrypting it using their
+        data-encryption key and a new initialisation vector. They then send the group description, AES-encrypted
+        group key and initialisation vector to the server (via HTTP).
+      * If they choose to decline then they send a message to the server which includes the group number. The server
+        then deletes the corresponding pending row from the table.
+
+      Accept-branch notes:
+
+      Note that this should be refused by the server if the target contact already has a group_locals row with the
+      given group number (likely this will fail as soon as a new row is attempted to be inserted below).
+      The server simultaneously inserts a new row into group_locals table for Y and updates the existing row in the
+      "group_shares" table to have an encrypted_group_key value of NULL, and the current time since epoch as the
+      share_time. The server then returns all of the information for the group so that Y can store it locally.
+
+      Also note that Y may be unable to decrypt the received group as Y may have recently regenerated their keypair
+      (or X may have maliciously provided invalid RSA-encrypted data).
+      When this occurs Y sends a message to the server to update the share_status to failed, a failure message is
+      displayed to Y, and Y notifies X of the failed status via an XMPP message.
+
+  5aa.If X currently has an XMPP connection:
+      * If Y chose to accept the request, Y sends a message to X indicating that the server has added Y to the
+        group. Note that the associated row in the group_shares table is kept to ensure that there is a record of
+        this group share (X can display "share successful" in the app however they wish). Y should also have the
+        group object added to their internal list.
+      * If Y chose to decline the request, Y sends a message to X indicating that the request has been rejected.
+        The application can handle this however it chooses but the default action is that X just removes the
+        corresponding pending request from their internal list.
+  5ab.If X currently has no XMPP connection, X should load all pending and shared groups during (every) sign-in.
+  4b. If Y currently has no XMPP connection, Y should load all pending and shared groups during (every) sign-in.
+      For any pending request(s) go back to part 5a.
+      Note that all pending groups should be sent in one batch (list), therefore even in the cases where only a
+      single request is required it is still sent as a 1-element list.
+
+5.1.3.2 Protocol notes
+
+* The private half of the asymmetric key-encryption key is stored encrypted using the same data-encryption key as
+  used for other operations (e.g. encrypted symmetric group keys).
+* If somebody maliciously encrypts a group key with an invalid public key and the receiving contact accepts the
+  request, the target contact should see an appropriate failure message and the (malicious) source contact should
+  also be informed.
+* If somebody maliciously encrypts an invalid group key with a valid public key and the receiving contact accepts the
+  request, the target contact will be unaware until they attempt to decrypt a message (which will fail). The target
+  contact's only option is to rejoin the group.
+
+5.1.3.3 Malicious group-shares
+
+If the group key was encrypted by the source contact using an invalid public key then the target contact will be
+unable to decrypt it and an exception will be thrown. This failure case is handled separately to internal errors as
+this is (likely to be) a malicious share request. However, the likelihood that this occurs is extremely low:
+* It is possible for the source contact to legitimately encrypt a group key with an old public key if the target
+  contact is signing in and regenerating their key-pair at the same time, however the target should also check for
+  group keys encrypted with the old public key immediately after regenerating their key-pair, thus this failure case
+  does not occur.
+* A malicious source contact *could* reproduce this case, however a more effective attack is to use a valid public
+  key to encrypt an invalid group key. The target contact will join the group and be unaware of their invalid group
+  key until they attempt to decrypt a message (which will fail); the target contact's only option is to leave rejoin
+  the group.
+
+5.1.3.4 Limiting group-shares
+
+In addition to the mandatory restrictions the server places on group-sharing (described above) limits are imposed on
+the number of pending requests any contact can send or receive:
+
+  1. The number of pending requests any contact can receive.
+     * This encourages contacts to deal with requests they have received rather than ignoring them.
+  2. The number of pending requests any contact can receive from contacts they have not added as a known contact.
+     * This number must (by definition) be less than the above limit.
+     * This reserves a certain number of requests for contacts which the receiving contact has chosen to add as known
+       contacts (the number is this limit subtracted from the overall limit defined above).
+  3. The number of pending requests any contact can send to contacts who have not added them as a known contact.
+     * This reduces malicious database spam and "message" spam to multiple contacts e.g. by creating an advertisement
+       as a group name and sending this to as many contacts as possible.
+     * This limit functions independently of the limits imposed on the receiving contact (defined above).
+
+Note that as soon as a request changes from pending to another status it no longer contributes to the limit.
+
+These limits prevent a share-request from being created so only the contact attempting to send the request will see
+that any of these limits has been reached. The server should not specify in the response which of these limits has
+been reached since this could leak information e.g. if a contact knows that it has reached its limit for sending
+group requests to contacts which have not added them as a known contact then it is possible to determine if someone
+else has added them as a known contact by purposely reaching the limit then sending requests out to contacts to see
+if sharing is refused or not.
+
+
+5.1.4 [FUTURE FEATURE] Request group
+Requesting a group requires two users to be contacts of each other.
+
+A list of public "open" groups will be available in the contact details section.
+
+For each group a user has access to, one of the following group visibility levels will be implemented:
+  1. Open   (Public)  - All contacts can see the group.
+  2. Closed (Private) - Only other contacts who are also a member of the group can search for the group.
+
+5.1.5 Load more contacts
+Section note: n = 50.
+
+To reduce the amount of time taken for a user to switch to their main list of contacts, a maximum of n contacts
+are loaded when the user signs in. The user can send a HTTP request to the server to load another n contacts on
+demand, an infinite number of times.
+
+Loading more contacts has the following effect on the application:
+- The main list of contacts displays (up to) n more contacts.
+- The internal lists storing the contact objects store (up to) n more contacts.
+- Fewer than n contacts are loaded if the server has run out of unloaded contacts to send the application.
+- Note that known contacts are given priority to load before extended contacts.
+
+The JSON object which the application sends to the server has the following pseudo-form:
+
+       {
+           'accessToken'            : This authorises a specific contact number.
+           'numOfLoadedContacts'    : The number of contacts which the user has loaded in the current app view.
+           'groupNumber'            : Group number.
+       }
+
+Note that the 'groupNumber' only exists when the application requests contacts for a specific group.    
+
+The JSON object which the server sends to the application has the following pseudo-form:
+
+       {
+           'groupNumber'       : Group number
+           'knownContacts'     : JSON array
+           'extendedContacts'  : JSON array
+           'allContactsLoaded' : true <==> all contacts are loaded for the group_number, false otherwise.
+       }
+
+the 'groupNumber' JSON key only exists when the application requests contacts for a specific group.
+Each JSON object in the JSON arrays contain known/extended contact information:
+
+       {
+           {
+               'groupNumber'   : group number 0
+               'contactNumber' : contact number 0
+               'contactImage'  : contact image 0
+               'contactName'   : contact name 0
+           }
+                              ...
+           {
+               'groupNumber'   : group number n-1
+               'contactNumber' : contact number n-1
+               'contactImage'  : contact image n-1
+               'contactName'   : contact name n-1
+           }
+       }
+
+Note that the 'groupNumber' exists regardless of if the application requests contacts for a specific group or not,
+in order to simplify the Java implementation.
+
+When the client application requests more contacts to load, it checks which application view it is requesting from,
+i.e. the "main" view (which holds all loaded contacts) or the "group contacts" view (which only holds all contacts
+for a specific group). If the request is from the main view, then the 'group_number' field is left blank, otherwise
+the group number is specified and the client sends a JSON object with this number and the contact's number.
+
+The server then retrieves all known contact numbers for the given contact and group, making sure to only load
+contacts from the database with indices numOfLoadedContacts to numOfLoadedContacts + n; if no group is specified
+then the server retrieves all known contact numbers for the given contact.
+- If the number of known contacts retrieved is more than n, the excess contacts are ignored.
+- If the number of known contacts retrieved is less than n, the process is repeated with extended contacts.
+
+The server then retrieves the contact image and name for each known/extended contact number, forms the appropriate
+JSON message and sends it back to the client.
+
+The client application then checks if the sent contact number and group number are the same as those sent.
+- If the group number is specified, then the client additionally checks that each group number in the JSON array is
+  the same as the main group number, throwing an error if any of these group numbers does not match.
+- If the group number is blank then the above check is not necessary, but all group numbers received must be checked
+  to be known groups to the client; if not an error is thrown.
+
+The client application then checks its internal static lists of known and extended contacts for the received
+contact numbers, and creates new Contact objects if the contact number(s) are not found or updates the existing
+Contact objects if the contact number(s) are found.
+
+Finally, "group" application view is updated so that the new contacts can be seen in all views,
+and a message is displayed in the application indicating that the list of contacts (either for a specific group or
+for all groups) is up-to-date if 'all_loaded' == true.
+
+5.1.6 Sign-out
+Signing-out a contact includes the following operations:
+  - Removing all contact data. This includes:
+    - The current contact
+    - Known contacts
+    - Extended contacts
+    - The selected group
+    - Known (a.k.a. common) groups
+  - Disconnecting the XMPP connection.
+
+5.1.7 Unload specific contacts (Testing)
+
+For testing purposes it is useful to unload a specific list of contacts to reset only specific server-database
+entries.
+
+The JSON object which the application sends to the server has the following pseudo-form:
+
+       {
+           'contactNumber'            : Contact number
+           'knownContactsToUnload'    : A list of contact group objects
+           'extendedContactsToUnload' : A list of contact group objects
+       }
+
+The contact group objects list above has the following form:
+
+       {
+           'groupNumber'         : Group number
+           'targetContactNumber' : Known/Extended contact number
+       }
+
+The server should send an empty status OK to the application if the unload operation was successful, and an error
+status otherwise.
+
+5.2 User alerts
+The user is notified when any of the following events occur:
+  1. A user has been signed out as a result of signing in from another location.
+  2. Another contact has shared (or is requesting to share) a group with the current contact.
+  3. Other group updates.
+
+5.3 Display
+5.3.1 User welcome screen
+5.3.1.1 User registration
+
+
+5.3.2.1 User sign-in
+Upon creating the sign-in activity the SSL/TLS setup occurs. Any exception should display an appropriate error
+message to the contact but not prevent further operations (although practically the application will become unusable).
+
+5.3.3.1 User sign-out
+A user stays signed-in permanently until ONE of the following happens:
+  1. The user clicks a "Sign out" button/option from within the app.
+  2. A user gets automatically signed out when signing in from another location.
+     - A visual message is shown in old sign-in locations.
+     - Communications to the root server are rejected for old sign-in locations.
+
+5.3.2 Groups and Contacts Recyclerviews
+Recyclerviews have certain limitations based on the amount of memory the phone has, for example, initialising a
+Recyclerview with thousands of items will reduce the speed at which it loads and displays all items.
+
+The following list of constraints addresses these memory limitations:
+- The maximum number of groups a contact can have access to is 256, all of which are loaded at once when the
+  contact signs in.
+- There is no maximum number of known and extended contacts a contact can have access to, however only n are
+  loaded when the contact signs in, and a further n are loaded for every load request.
+  - The additional contacts are requested from the server on demand by the user, and the internal lists are updated
+    at the same time.
+  - Known contacts are given priority to load before extended contacts if no other priority is specified.
+
+
+6 Data structures
+6.1 Printable characters
+The following section describes the structure and/or format for specific attributes.
+
+A "printable character" is a character which is one of the following:
+ - letters (a-z, A-Z),
+ - digits (0-9)
+ - !"#$%&'()*+,-./:;<=>?@[\]^_`{|}~
+
+6.2 Base4352 characters
+The reason for implementing a custom-made Base4352 character set is so that a published text message appears visibly
+shorter than it would do if it were a URL-safe Base64 message. One disadvantage is that the characters are not always
+displayable, but as long as no information is lost this does not matter. Note that the Base4352 character set does
+not include any characters in the start and end tags, or characters which may interfere with HTML such as <> or ().
+
+For more information see the GlobalUtils library code for the Base4352 class.
+
+
+7 Apache James mail server
+7.1 Introduction
+The following section outlines the design requirements for the Apache James mail server which is used to send emails
+to users.
+
+7.2 Mail servers
+Although generally referred to as "the mail server" Apache James actually runs multiple services. The following
+subsections detail how these services should be configured.
+
+7.2.1 SMTP
+- This runs by default and should remain active.
+- Default port number 25 should be changed to 465 (to switch from unencrypted mail to SSL/TLS encrypted mail).
+- SSL/TLS should be enabled i.e. "socketTLS=true".
+- Authentication should be enabled i.e. "announce" authRequired
+- The RSA key-pair required for SSL/TLS should not be used for any other purpose, i.e. it should not reuse the
+  key-pair used to encrypt SSL/TLS communications between the main application and the HTTPS server.
+  - The Ubuntu "keytool" programme can be used to generate the key-pair.
+
+7.2.1 IMAP/POP3
+- This runs by default and should turned off to prevent incoming emails.
+
+7.3 Mail server usage
+Emails are sent to users/contacts for the following reasons:
+- To send an activation code required to complete an account registration.
+- To send a recovery code required to recover an account without a password using the last sign-in/registration
+  device.
+- To send a sign-in code required to sign in on a device other than the last sign-in/registration device.
+
+
+
+8 XMPP server (Server to application communication)
+8.1 Introduction
+Whilst the majority of communications between the client application and server(s) are initiated by the client (and
+performed using HTTPS) some communications between the two entities must be initiated by the server e.g. alerting a
+contact of a group they have been invited to join. All XMPP messages use TLS/SSL, and connections to the XMPP server
+are authenticated by verifying the access token supplied as the client's password. An XMPP connection is initialised
+for each contact with the server after they sign-in to allow (only) the HTTPS server to send messages to the client
+via the XMPP server (the application should be configured to only receive and accept XMPP messages sent by the HTTPS
+server).
+
+8.2 User authentication
+Authenticating users connecting to the XMPP server ensures that only authorised users are able to send and receive
+messages sent via this server. To authenticate successfully the user must supply a user name and password. The
+password is the user's access token (given to them during sign-in if they are a contact or given to them during
+server setup if they are the HTTPS server), the contents of which is verified using a secret (symmetric) key. If the
+user name in the access token matches the plaintext user name supplied then the user has successfully authenticated
+and is connected to the XMPP server; failure to authenticate means no connection is established between the user and
+the XMPP server.
+
+8.3 Messages contents
+When the HTTPS server needs to supply a contact updated information e.g. alerting a contact of a group they have been
+invited to join, they should not send this information directly in the XMPP message body but instead send a known
+message code indicating which resource the contact needs to update. The contact receiving the XMPP message should
+then initiate a conventional HTTPS request to the HTTPS server for the appropriate resource. The reason(s) for this
+obfuscation is because XMPP messages sent from the HTTPS server may be delayed (e.g. a slow connection or the contact
+is not currently online) thus information in the XMPP message body may be out-of-date; asking the contact to retrieve
+their own updated data ensures that even if their data is already up-to-date they will not be supplied any data which
+could cause a synchronisation issue.
+
+
+9 Miscellaneous
+9.1 Automatic account sign-out
+This feature is intended to both help users automatically sign out of all devices except their most recently
+signed-in device and reduce synchronisation issues from sending 
+
+When a user requests to sign-in, after the user credentials have been validated the server establishes a (XMPP)
+connection with the device, automatically disconnecting any other (XMPP) connection it has with the user on another
+device (note that the server should be configured to refuse to connect a user if they already have an existing
+connection).
+
+If a device's (XMPP) connection gets disconnected it is assumed that either they have chosen to sign out or another
+device has signed in with their credentials. In this second case the contact should be immediately automatically
+signed out (and an appropriate message should explain that they have been signed out automatically).
+
+Devices should implement a retry policy such that every time they reconnect to the internet they always try to re-
+establish a connection (assuming that they are signed-in).
+
+9.1.1 XMPP Openfire (server-side) and Smack (client-side)
+- If the server terminates a connection manually then the connectionClosed() method is triggered by Smack.
+- If the client terminates a connection manually then the connectionClosed() method is triggered by Smack.
+- If another client overwrites a connection then the connectionClosedOnError() method is triggered by Smack.
+  - The XMPPException.StreamErrorException contains the string "conflict".
+- If the server becomes offline then the connectionClosedOnError() method is triggered by Smack.
+  - The XMPPException.StreamErrorException contains the string "system-shutdown"
+  ? OR throws a SmackException
+  ? OR throws "Parser got END_DOCUMENT event. This could happen e.g. if the server closed the connection without
+    sending a closing stream element"
+
+9.2 Automatic contact updates
+
+
+
+--- DEPRECATED SECTIONS ---
+
+A Python - On-key text encryption
+A.1 Introduction
+On-key text encryption allows the user to press a single key (currently the ` key) an encrypt either the selected text in the
+currently selected text box, or all text in the text box if no text is selected.
+
+A.2 Implementation decisions
+The text encrypter must be implemented individually for Windows, Linux (not yet implemented) and Apple (not yet implemented)
+operating systems since it relies on simulating keyboard presses to copy and paste to and from the operating system's clipboard.
+
+A browser plug-in would have been easier to implement and would not suffer from being operating system-dependent,
+however this would only allow text encryption in the currently selected browser and not in arbitrary windows.
+
+
+B Python - SQLite external databases
+B.1 Introduction
+Server-side, SQLite is chosen to create external databases due to its superior lookup speed (in comparison to standard Python data
+structures e.g. lists and sets), the fact that it does not need to be encrypted and its compatibility with Python.
+
+User-side, files are used to read group data from since this gives more flexibility in the future with file encryption keys.
+
+B.2 Root database
+The root socket server, which routes messages between users, reads user names and IP addresses directly from the SQL
+database. The SQLite database contains rows with two values: the user name and IP address.
+
+The database is created once and [TODO:] new entries are added whenever a new user is created.
+
+
+C Javascript - Automatic text decryption
+C.1 Introduction
+Automatic text decryption allows a user to automatically read encrypted messages as plaintext provided that they have
+access to the group (and hence group key) which encrypted the message(s).
+
+Currently this is achieved via a (separate) browser plugin written in Javascript, which loads the known group names
+and keys from the local file system; this means that the groups will be simultaneously loaded (i.e. loaded in two
+places at once) by the Python and Javascript programmes.
+
+
+D Message encryption/decryption process - Design Justification
+- From a purely theoretical cryptographic point-of-view, the message-encryption key is treated like a one-time pad;
+  the server generates a new key when it receives a client encryption/decryption request, and the next time the
+  client issues a request it uses the "inverse" key (i.e. each bit is inverted such that K XOR K^-1 = 0).
+  Since the same message-encryption key is never reused, there is little value gained by an adversary knowing this
+  key outside of being able to read a single plaintext message.
+  Note that the client also generates a new initialisation vector for every exchange, thus both the client and
+  server have some control over the randomisation involved in the protocol.
+- If an adversary gains access to all of a contact's group keys and message-encryption key they are able to send
+  messages for any of their groups and act as the user indefinitely. The group keys cannot be modified, however
+  the message-encryption key for the user can be regenerated any number of times; doing this means that the server
+  will not recognise any encryption/decryption requests from the adversary using an old message-encryption key.
+- Possible ways an adversary could gain access to a contact's private keys include:
+  - Using malicious firmware on their device to extract the private keys from memory. At this point any number of
+    adversaries with access to these private keys can spoof messages without having to sign in to the contact's
+    account. If a new message-encryption key is generated by the server every time an encryption/decryption
+    request is submitted then either the contact submits the next request (thus the fact that an adversary has
+    the contact's private message-encryption key is irrelevant) or the adversary submits the next request. In the
+    latter case, any subsequent requests made by the contact will fail (with an error 400) and the contact should
+    take steps to recover their account.
