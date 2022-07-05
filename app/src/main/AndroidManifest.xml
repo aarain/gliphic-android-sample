@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="gliphic.android">
+
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/gliphic_icon_white"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:extractNativeLibs="true"
+        android:theme="@style/AppTheme">    <!-- This defines the parent theme and any modifications. -->
+
+        <activity
+            android:name="gliphic.android.display.main.MainActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="stateHidden"
+            android:launchMode="singleTask"
+            android:taskAffinity="">
+
+            <!-- Remove the following warning: "App is not indexable by Google Search; consider adding at least -->
+            <!-- one Activity with an ACTION-VIEW intent-filter." -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name="gliphic.android.display.browser.BrowserActivity"
+            android:taskAffinity="gliphic.android.display.browser.BrowserActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="stateHidden">
+        </activity>
+
+        <activity
+            android:name="gliphic.android.display.TermsOfUseActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="stateHidden">
+        </activity>
+
+        <activity
+            android:name="gliphic.android.display.welcome_screen.SignInActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="stateHidden">
+        </activity>
+
+        <activity
+            android:name="gliphic.android.display.welcome_screen.RegisterActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="stateHidden"
+            android:parentActivityName="gliphic.android.display.welcome_screen.SignInActivity">
+        </activity>
+
+        <activity
+            android:name="gliphic.android.display.welcome_screen.SubmitCodeActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="stateHidden"
+            android:parentActivityName="gliphic.android.display.welcome_screen.SignInActivity">
+        </activity>
+
+        <activity
+            android:name="gliphic.android.display.GroupSelectionActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="stateHidden"
+            android:label="@string/group_selection_header"
+            android:parentActivityName="gliphic.android.display.main.MainActivity">
+        </activity>
+
+        <activity
+            android:name="gliphic.android.display.CreateGroupActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="stateHidden"
+            android:label="@string/create_group_header"
+            android:parentActivityName="gliphic.android.display.main.MainActivity">
+        </activity>
+
+        <activity
+            android:name="gliphic.android.display.AddContactActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="stateHidden"
+            android:label="@string/add_contact_header"
+            android:parentActivityName="gliphic.android.display.main.MainActivity">
+        </activity>
+
+        <activity
+            android:name="gliphic.android.display.ContactProfileActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="stateHidden"
+            android:label="@string/contact_profile_header"
+            android:parentActivityName="gliphic.android.display.main.MainActivity">
+        </activity>
+
+        <activity
+            android:name="gliphic.android.display.AccountSecurityActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="stateHidden"
+            android:label="@string/account_security_header"
+            android:parentActivityName="gliphic.android.display.ContactProfileActivity">
+        </activity>
+
+        <activity
+            android:name="gliphic.android.display.pictures.DisplayPicturesActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="stateHidden"
+            android:label="@string/display_pictures_header"
+            android:parentActivityName="gliphic.android.display.main.MainActivity">
+        </activity>
+
+        <activity
+            android:name="gliphic.android.display.pictures.SinglePictureActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="stateHidden"
+            android:label="@string/single_picture_header"
+            android:parentActivityName="gliphic.android.display.pictures.DisplayPicturesActivity">
+        </activity>
+
+        <activity
+            android:name="gliphic.android.display.ReportActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="stateHidden"
+            android:label="@string/report_header"
+            android:parentActivityName="gliphic.android.display.main.MainActivity">
+        </activity>
+
+        <activity
+            android:name="gliphic.android.display.GroupShareActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="stateHidden"
+            android:label="@string/group_share_header"
+            android:parentActivityName="gliphic.android.display.main.MainActivity">
+        </activity>
+
+        <activity
+            android:name="gliphic.android.display.main.group_details.GroupDetailsActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="stateHidden"
+            android:label="@string/group_details_header"
+            android:parentActivityName="gliphic.android.display.main.MainActivity">
+        </activity>
+
+        <activity
+            android:name="gliphic.android.display.main.contact_details.ContactDetailsActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="stateHidden"
+            android:label="@string/contact_details_header"
+            android:parentActivityName="gliphic.android.display.main.MainActivity">
+        </activity>
+
+        <service
+            android:name="gliphic.android.operation.server_interaction.xmpp_server.ConnectionService">
+        </service>
+
+    </application>
+
+</manifest>

@@ -1,0 +1,25 @@
+{
+  "manifest_version": 2,
+  "name": "Gliphic-Auto-Decrypt",
+  "version": "1.0.0",
+  "description": "Automatically decrypts messages encrypted using Gliphic.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "auto-decrypt@gliphic.co.uk"
+    }
+  },
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["auto_decrypt.js"]
+    }
+  ],
+  "permissions": [
+    "nativeMessaging",
+    "nativeMessagingFromContent",
+    "geckoViewAddons"
+  ]
+}
